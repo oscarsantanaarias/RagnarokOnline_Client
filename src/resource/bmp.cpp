@@ -1,5 +1,5 @@
 #include "ro/resource/bmp.hpp"
-#include <fstream>
+#include <windows.h>
 #include <cstring>
 
 namespace ro::resource {
@@ -124,16 +124,34 @@ std::optional<BmpImage> BmpImage::load_from_memory(std::span<const uint8_t> buff
 }
 
 std::optional<BmpImage> BmpImage::load_from_file(const std::filesystem::path& path) {
-    std::ifstream file(path, std::ios::binary | std::ios::ate);
-    if (!file.is_open()) {
+    HANDLE hFile = CreateFileW(
+        path.wstring().c_str(),
+        GENERIC_READ,
+        FILE_SHARE_READ,
+        nullptr,
+        OPEN_EXISTING,
+        FILE_ATTRIBUTE_NORMAL,
+        nullptr
+    );
+
+    if (hFile == INVALID_HANDLE_VALUE) {
         return std::nullopt;
     }
 
-    const auto size = file.tellg();
-    file.seekg(0, std::ios::beg);
+    DWORD file_size = GetFileSize(hFile, nullptr);
+    if (file_size == INVALID_FILE_SIZE || file_size < 54) {
+        CloseHandle(hFile);
+        return std::nullopt;
+    }
 
-    std::vector<uint8_t> buffer(size);
-    file.read(reinterpret_cast<char*>(buffer.data()), size);
+    std::vector<uint8_t> buffer(file_size);
+    DWORD bytes_read = 0;
+    BOOL ok = ReadFile(hFile, buffer.data(), file_size, &bytes_read, nullptr);
+    CloseHandle(hFile);
+
+    if (!ok || bytes_read != file_size) {
+        return std::nullopt;
+    }
 
     return load_from_memory(buffer);
 }

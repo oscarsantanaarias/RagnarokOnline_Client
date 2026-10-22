@@ -30,7 +30,7 @@ public:
                              actor::ActionType action, actor::Direction dir, size_t motion_idx,
                              int32_t center_x, int32_t center_y, float scale = 1.0f, float camera_yaw_deg = 0.0f);
 
-    // Renders the Ragnarok map ground terrain and cell grid centered on camera coordinates with rotation and textures
+    // Renders the Ragnarok map ground with continuous affine texture mapping, yaw rotation, and pitch perspective
     void draw_map_ground(
         const world::GatCollision& gat,
         const world::GndMap* gnd,
@@ -38,6 +38,7 @@ public:
         float cam_y,
         float zoom,
         float yaw_deg = 0.0f,
+        float pitch_deg = 45.0f,
         float time_sec = 0.0f
     );
 

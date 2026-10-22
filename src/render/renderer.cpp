@@ -110,7 +110,7 @@ void SoftwareRenderer::draw_composite_actor(const resource::SprResource* body_sp
                                            int32_t center_x, int32_t center_y, float scale, float camera_yaw_deg) {
     if (!body_spr || !body_act || body_act->actions().empty() || scale <= 0.001f) return;
 
-    // Adjust apparent facing direction by camera yaw (45 degrees per cardinal step)
+    // Adjust apparent facing direction by camera yaw (45 degrees per step)
     int yaw_steps = static_cast<int>(std::round(camera_yaw_deg / 45.0f)) % 8;
     if (yaw_steps < 0) yaw_steps += 8;
     const actor::Direction effective_dir = static_cast<actor::Direction>((static_cast<size_t>(dir) + 8 - yaw_steps) % 8);
@@ -175,108 +175,77 @@ void SoftwareRenderer::draw_map_ground(
     float cam_y,
     float zoom,
     float yaw_deg,
+    float pitch_deg,
     float time_sec
 ) {
     const float base_cell_size = 28.0f;
     const float cell_size = base_cell_size * zoom;
-    if (cell_size < 2.0f) return;
+    if (cell_size < 1.0f) return;
 
     const float center_sx = m_width * 0.5f;
     const float center_sy = m_height * 0.5f;
 
-    const float rad = yaw_deg * (3.1415926535f / 180.0f);
-    const float cos_a = std::cos(rad);
-    const float sin_a = std::sin(rad);
+    const float rad_yaw = yaw_deg * (3.1415926535f / 180.0f);
+    const float cos_yaw = std::cos(rad_yaw);
+    const float sin_yaw = std::sin(rad_yaw);
 
-    const float half_diag = std::sqrt(center_sx * center_sx + center_sy * center_sy) / cell_size + 2.0f;
-    const int32_t min_cx = std::max(0, static_cast<int32_t>(cam_x - half_diag));
-    const int32_t max_cx = std::min(static_cast<int32_t>(gat.width()) - 1, static_cast<int32_t>(cam_x + half_diag));
+    const float rad_pitch = std::clamp(pitch_deg, 20.0f, 85.0f) * (3.1415926535f / 180.0f);
+    const float sin_pitch = std::sin(rad_pitch);
 
-    const int32_t min_cy = std::max(0, static_cast<int32_t>(cam_y - half_diag));
-    const int32_t max_cy = std::min(static_cast<int32_t>(gat.height()) - 1, static_cast<int32_t>(cam_y + half_diag));
+    const float map_w = static_cast<float>(gat.width());
+    const float map_h = static_cast<float>(gat.height());
 
-    const int32_t step = std::max(1, static_cast<int32_t>(cell_size));
+    // Affine texture mapping scanline constants
+    // As X advances by 1 screen pixel:
+    const float dWx = cos_yaw / cell_size;
+    const float dWy = -sin_yaw / cell_size;
 
-    for (int32_t cy = min_cy; cy <= max_cy; ++cy) {
-        for (int32_t cx = min_cx; cx <= max_cx; ++cx) {
-            const float dx = static_cast<float>(cx) - cam_x;
-            const float dy = static_cast<float>(cy) - cam_y;
+    for (uint32_t y = 0; y < m_height; ++y) {
+        // Vertical offset relative to center (in world elevation perspective)
+        const float sy_rel = (center_sy - static_cast<float>(y)) / (cell_size * sin_pitch);
+        const float rx_start = -center_sx / cell_size;
 
-            // Camera yaw rotation (around player center)
-            const float rx = dx * cos_a - dy * sin_a;
-            const float ry = dx * sin_a + dy * cos_a;
+        // Unrotated starting world coordinates at x = 0
+        const float wx_start = cam_x + rx_start * cos_yaw + sy_rel * sin_yaw;
+        const float wy_start = cam_y - rx_start * sin_yaw + sy_rel * cos_yaw;
 
-            const int32_t sx_start = static_cast<int32_t>(center_sx + rx * cell_size - cell_size * 0.5f);
-            const int32_t sy_start = static_cast<int32_t>(center_sy - ry * cell_size - cell_size * 0.5f);
-            const int32_t sx_end = sx_start + step;
-            const int32_t sy_end = sy_start + step;
+        float wx = wx_start;
+        float wy = wy_start;
+        const size_t row_idx = static_cast<size_t>(y) * m_width;
 
-            if (sx_end < 0 || sx_start >= static_cast<int32_t>(m_width) ||
-                sy_end < 0 || sy_start >= static_cast<int32_t>(m_height)) {
-                continue;
-            }
+        for (uint32_t x = 0; x < m_width; ++x, wx += dWx, wy += dWy) {
+            if (wx >= 0.0f && wx < map_w && wy >= 0.0f && wy < map_h) {
+                // Continuous texture sampling from GND bitmap textures
+                uint32_t color = gnd ? gnd->sample_ground_color(wx, wy) : 0x00A39A8B;
 
-            const auto* cell = gat.get_cell(cx, cy);
-            if (!cell) continue;
+                const int32_t cx = static_cast<int32_t>(wx);
+                const int32_t cy = static_cast<int32_t>(wy);
+                const auto* cell = gat.get_cell(cx, cy);
 
-            // Sample ground texture from GND
-            uint32_t tile_color = 0x00A39A8B;
-            if (gnd) {
-                tile_color = gnd->sample_ground_color(static_cast<float>(cx), static_cast<float>(cy));
-            }
-
-            switch (cell->type) {
-                case world::CellType::Walkable: {
-                    // Height slope relief shading
-                    const float slope = (cell->top_left - cell->bottom_right) * 3.5f;
-                    int32_t r = ((tile_color >> 16) & 0xFF) + static_cast<int32_t>(slope);
-                    int32_t g = ((tile_color >> 8)  & 0xFF) + static_cast<int32_t>(slope);
-                    int32_t b = (tile_color & 0xFF)        + static_cast<int32_t>(slope);
-                    tile_color = (std::clamp(r, 0, 255) << 16) |
-                                 (std::clamp(g, 0, 255) << 8)  |
-                                 std::clamp(b, 0, 255);
-                    break;
-                }
-                case world::CellType::NonWalkable: {
-                    // Darken for non-walkable building or wall
-                    int32_t r = (((tile_color >> 16) & 0xFF) * 5) / 10;
-                    int32_t g = (((tile_color >> 8)  & 0xFF) * 5) / 10;
-                    int32_t b = ((tile_color & 0xFF) * 5) / 10;
-                    tile_color = (r << 16) | (g << 8) | b;
-                    break;
-                }
-                case world::CellType::WalkableWater:
-                case world::CellType::WalkableWater2: {
-                    const float wave = std::sin(static_cast<float>(cx) * 0.5f + time_sec * 3.0f) * 15.0f;
-                    int32_t b = std::clamp(static_cast<int32_t>(175 + wave), 0, 255);
-                    int32_t g = std::clamp(static_cast<int32_t>(115 + wave * 0.6f), 0, 255);
-                    tile_color = (0x20 << 16) | (g << 8) | b;
-                    break;
-                }
-                case world::CellType::NonWalkableSnipe:
-                case world::CellType::NonWalkableSnipe2: {
-                    int32_t r = (((tile_color >> 16) & 0xFF) * 7) / 10;
-                    int32_t g = (((tile_color >> 8)  & 0xFF) * 7) / 10;
-                    int32_t b = ((tile_color & 0xFF) * 7) / 10;
-                    tile_color = (r << 16) | (g << 8) | b;
-                    break;
-                }
-            }
-
-            const int32_t draw_y0 = std::clamp(sy_start, 0, static_cast<int32_t>(m_height));
-            const int32_t draw_y1 = std::clamp(sy_end,   0, static_cast<int32_t>(m_height));
-            const int32_t draw_x0 = std::clamp(sx_start, 0, static_cast<int32_t>(m_width));
-            const int32_t draw_x1 = std::clamp(sx_end,   0, static_cast<int32_t>(m_width));
-
-            for (int32_t dy = draw_y0; dy < draw_y1; ++dy) {
-                const size_t row_idx = static_cast<size_t>(dy) * m_width;
-                for (int32_t dx = draw_x0; dx < draw_x1; ++dx) {
-                    if ((dx == sx_start || dy == sy_start) && cell_size >= 14.0f) {
-                        m_pixels[row_idx + dx] = 0x00554E46; // Subtle grid bevel
+                if (cell) {
+                    if (cell->type == world::CellType::NonWalkable) {
+                        // 3D Shadow darkening for buildings and walls
+                        const uint32_t r = (((color >> 16) & 0xFF) * 55) / 100;
+                        const uint32_t g = (((color >> 8)  & 0xFF) * 55) / 100;
+                        const uint32_t b = ((color & 0xFF)         * 55) / 100;
+                        color = (r << 16) | (g << 8) | b;
+                    } else if (cell->type == world::CellType::WalkableWater || cell->type == world::CellType::WalkableWater2) {
+                        const float wave = std::sin(wx * 0.7f + time_sec * 3.5f) * 16.0f;
+                        const uint32_t b = std::clamp(static_cast<int32_t>(175 + wave), 0, 255);
+                        const uint32_t g = std::clamp(static_cast<int32_t>(120 + wave * 0.6f), 0, 255);
+                        color = (0x20 << 16) | (g << 8) | b;
                     } else {
-                        m_pixels[row_idx + dx] = tile_color;
+                        // Height slope relief shading
+                        const float slope = (cell->top_left - cell->bottom_right) * 3.2f;
+                        const int32_t r = std::clamp(static_cast<int32_t>((color >> 16) & 0xFF) + static_cast<int32_t>(slope), 0, 255);
+                        const int32_t g = std::clamp(static_cast<int32_t>((color >> 8)  & 0xFF) + static_cast<int32_t>(slope), 0, 255);
+                        const int32_t b = std::clamp(static_cast<int32_t>(color & 0xFF)         + static_cast<int32_t>(slope), 0, 255);
+                        color = (r << 16) | (g << 8) | b;
                     }
                 }
+                m_pixels[row_idx + x] = color;
+            } else {
+                m_pixels[row_idx + x] = 0x00141419; // Void outside map
             }
         }
     }

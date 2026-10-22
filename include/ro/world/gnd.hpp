@@ -51,6 +51,8 @@ public:
     // Samples texture color at world GAT cell coordinates (continuous world_x, world_y)
     [[nodiscard]] uint32_t sample_ground_color(float world_x, float world_y) const noexcept;
 
+    [[nodiscard]] const std::vector<resource::BmpImage>& textures() const noexcept { return m_textures; }
+
 private:
     uint32_t m_width{0};
     uint32_t m_height{0};
@@ -63,3 +65,4 @@ private:
 };
 
 } // namespace ro::world
+

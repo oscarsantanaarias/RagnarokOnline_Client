@@ -1,4 +1,5 @@
 #include "ro/world/gnd.hpp"
+#include <windows.h>
 #include <fstream>
 #include <cstring>
 #include <algorithm>
@@ -68,17 +69,15 @@ std::optional<GndMap> GndMap::load_from_memory(
             };
 
             for (const auto& cand : candidates) {
-                std::error_code ec;
-                if (std::filesystem::exists(cand, ec)) {
+                if (GetFileAttributesW(cand.wstring().c_str()) != INVALID_FILE_ATTRIBUTES) {
                     auto bmp = resource::BmpImage::load_from_file(cand);
-                    if (bmp) {
+                    if (bmp && !bmp->empty()) {
                         gnd.m_textures[i] = std::move(*bmp);
                         break;
                     }
                 }
             }
         } catch (...) {
-            // Gracefully continue if an individual texture file has an IO issue
         }
     }
 
@@ -147,16 +146,34 @@ std::optional<GndMap> GndMap::load_from_file(
     const std::filesystem::path& gnd_path,
     const std::filesystem::path& texture_base_dir
 ) {
-    std::ifstream file(gnd_path, std::ios::binary | std::ios::ate);
-    if (!file.is_open()) {
+    HANDLE hFile = CreateFileW(
+        gnd_path.wstring().c_str(),
+        GENERIC_READ,
+        FILE_SHARE_READ,
+        nullptr,
+        OPEN_EXISTING,
+        FILE_ATTRIBUTE_NORMAL,
+        nullptr
+    );
+
+    if (hFile == INVALID_HANDLE_VALUE) {
         return std::nullopt;
     }
 
-    const auto size = file.tellg();
-    file.seekg(0, std::ios::beg);
+    DWORD file_size = GetFileSize(hFile, nullptr);
+    if (file_size == INVALID_FILE_SIZE || file_size < 26) {
+        CloseHandle(hFile);
+        return std::nullopt;
+    }
 
-    std::vector<uint8_t> buffer(size);
-    file.read(reinterpret_cast<char*>(buffer.data()), size);
+    std::vector<uint8_t> buffer(file_size);
+    DWORD bytes_read = 0;
+    BOOL ok = ReadFile(hFile, buffer.data(), file_size, &bytes_read, nullptr);
+    CloseHandle(hFile);
+
+    if (!ok || bytes_read != file_size) {
+        return std::nullopt;
+    }
 
     return load_from_memory(buffer, texture_base_dir);
 }

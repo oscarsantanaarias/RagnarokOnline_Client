@@ -46,3 +46,4 @@ private:
 };
 
 } // namespace ro::resource
+

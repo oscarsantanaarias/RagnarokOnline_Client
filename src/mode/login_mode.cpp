@@ -318,7 +318,7 @@ void CLoginMode::on_draw() {
     // 1. Clear background
     m_renderer->clear(0x001B1C24);
 
-    // 2. Draw textured ground map centered on player world cell with camera rotation
+    // 2. Draw textured ground map centered on player world cell with continuous affine mapping and pitch foreshortening
     if (m_collision) {
         m_renderer->draw_map_ground(
             *m_collision,
@@ -327,6 +327,7 @@ void CLoginMode::on_draw() {
             m_world_cell_y,
             m_zoom,
             m_camera_yaw,
+            m_camera_pitch,
             m_elapsed_time
         );
     }
@@ -368,21 +369,23 @@ void CLoginMode::on_draw() {
             const char* act_names[] = { "Idle", "Walk", "Sit", "PickUp", "ReadyFight", "Attack", "Hurt", "Freeze", "Dead", "Special" };
 
             const std::string status = std::format(
-                "Map: Prontera | Cell: ({:.1f}, {:.1f}) | Zoom: {:.2f}x | Cam Yaw: {:.0f}\xC2\xB0 | Dir: {} | Action: {}",
-                m_world_cell_x, m_world_cell_y, m_zoom, m_camera_yaw,
+                "Map: Prontera | Cell: ({:.1f}, {:.1f}) | Zoom: {:.2f}x | Yaw: {:.0f}\xC2\xB0 | Pitch: {:.0f}\xC2\xB0 | Dir: {} | Action: {}",
+                m_world_cell_x, m_world_cell_y, m_zoom, m_camera_yaw, m_camera_pitch,
                 dir_names[static_cast<size_t>(m_dir) % 8],
                 (static_cast<size_t>(m_action) < 10) ? act_names[static_cast<size_t>(m_action)] : "Unknown"
             );
             TextOutA(hdc, 20, 45, status.c_str(), static_cast<int>(status.size()));
 
             SetTextColor(hdc, RGB(180, 225, 255));
-            const std::string hint = "Controls: Right-Click + Drag = Rotate Camera | Left-Click = Walk | Wheel = Zoom | Space = Action";
+            const std::string hint = "Controls: Right-Click / Ctrl+Left-Click Drag = Rotate/Tilt Camera | Left-Click = Walk | Wheel = Zoom";
             TextOutA(hdc, 20, 70, hint.c_str(), static_cast<int>(hint.size()));
 
             // Draw RO Green Click Ring Indicator in rotated camera space
             if (m_click_timer > 0.0f) {
                 const float base_cell_size = 28.0f;
                 const float cell_size = base_cell_size * m_zoom;
+                const float rad_pitch = std::clamp(m_camera_pitch, 20.0f, 85.0f) * (3.1415926535f / 180.0f);
+                const float sin_pitch = std::sin(rad_pitch);
 
                 const float dx = m_target_cell_x - m_world_cell_x;
                 const float dy = m_target_cell_y - m_world_cell_y;
@@ -392,7 +395,7 @@ void CLoginMode::on_draw() {
                 const float ry = dx * std::sin(rad) + dy * std::cos(rad);
 
                 const float click_sx = center_x + rx * cell_size;
-                const float click_sy = center_y - ry * cell_size;
+                const float click_sy = center_y - ry * (cell_size * sin_pitch);
 
                 HPEN greenPen = CreatePen(PS_SOLID, 2, RGB(80, 255, 100));
                 HGDIOBJ oldPen = SelectObject(hdc, greenPen);
@@ -449,18 +452,32 @@ intptr_t CLoginMode::on_msg(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
             return 1;
         }
 
-        // Navigation (Left Mouse Button Click)
+        // Navigation or Control+Click Tilt
         case WM_LBUTTONDOWN: {
-            const float sx = static_cast<float>(static_cast<int16_t>(LOWORD(lparam)));
-            const float sy = static_cast<float>(static_cast<int16_t>(HIWORD(lparam)));
+            const int16_t mouse_x = static_cast<int16_t>(LOWORD(lparam));
+            const int16_t mouse_y = static_cast<int16_t>(HIWORD(lparam));
+
+            // Ctrl + Left Click tilts camera (RO feature: Ctrl+Drag alters vertical view angle)
+            if ((GetKeyState(VK_CONTROL) & 0x8000) != 0 || (GetKeyState(VK_SHIFT) & 0x8000) != 0) {
+                m_is_rotating_cam = true;
+                m_last_mouse_x = mouse_x;
+                m_last_mouse_y = mouse_y;
+                SetCapture(hwnd);
+                return 1;
+            }
+
+            const float sx = static_cast<float>(mouse_x);
+            const float sy = static_cast<float>(mouse_y);
             const float center_sx = m_renderer ? (m_renderer->width() * 0.5f) : 512.0f;
             const float center_sy = m_renderer ? (m_renderer->height() * 0.5f) : 384.0f;
             const float base_cell_size = 28.0f;
             const float cell_size = base_cell_size * m_zoom;
+            const float rad_pitch = std::clamp(m_camera_pitch, 20.0f, 85.0f) * (3.1415926535f / 180.0f);
+            const float sin_pitch = std::sin(rad_pitch);
 
             // Screen delta relative to screen center
             const float rx = (sx - center_sx) / cell_size;
-            const float ry = (center_sy - sy) / cell_size;
+            const float ry = (center_sy - sy) / (cell_size * sin_pitch);
 
             // Unrotate by -yaw angle to get continuous world cell coordinates
             const float rad = -m_camera_yaw * (3.1415926535f / 180.0f);
@@ -476,6 +493,15 @@ intptr_t CLoginMode::on_msg(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
             return 1;
         }
 
+        case WM_LBUTTONUP: {
+            if (m_is_rotating_cam && (wparam & MK_RBUTTON) == 0) {
+                m_is_rotating_cam = false;
+                ReleaseCapture();
+                return 1;
+            }
+            break;
+        }
+
         case WM_MOUSEMOVE: {
             const int16_t mouse_x = static_cast<int16_t>(LOWORD(lparam));
             const int16_t mouse_y = static_cast<int16_t>(HIWORD(lparam));
@@ -484,11 +510,13 @@ intptr_t CLoginMode::on_msg(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
                 const float delta_x = static_cast<float>(mouse_x - m_last_mouse_x);
                 const float delta_y = static_cast<float>(mouse_y - m_last_mouse_y);
 
+                // Horizontal movement rotates Yaw
                 m_camera_yaw += delta_x * 0.45f;
                 while (m_camera_yaw < 0.0f) m_camera_yaw += 360.0f;
                 while (m_camera_yaw >= 360.0f) m_camera_yaw -= 360.0f;
 
-                m_camera_pitch = std::clamp(m_camera_pitch + delta_y * 0.35f, 20.0f, 85.0f);
+                // Vertical movement adjusts Pitch (lowering/raising view angle)
+                m_camera_pitch = std::clamp(m_camera_pitch - delta_y * 0.35f, 20.0f, 85.0f);
 
                 m_last_mouse_x = mouse_x;
                 m_last_mouse_y = mouse_y;
@@ -502,9 +530,11 @@ intptr_t CLoginMode::on_msg(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
                 const float center_sy = m_renderer ? (m_renderer->height() * 0.5f) : 384.0f;
                 const float base_cell_size = 28.0f;
                 const float cell_size = base_cell_size * m_zoom;
+                const float rad_pitch = std::clamp(m_camera_pitch, 20.0f, 85.0f) * (3.1415926535f / 180.0f);
+                const float sin_pitch = std::sin(rad_pitch);
 
                 const float rx = (sx - center_sx) / cell_size;
-                const float ry = (center_sy - sy) / cell_size;
+                const float ry = (center_sy - sy) / (cell_size * sin_pitch);
 
                 const float rad = -m_camera_yaw * (3.1415926535f / 180.0f);
                 const float wx = rx * std::cos(rad) - ry * std::sin(rad);
@@ -538,6 +568,7 @@ intptr_t CLoginMode::on_msg(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
                 case 'R': {
                     m_zoom = 1.0f;
                     m_camera_yaw = 0.0f;
+                    m_camera_pitch = 45.0f;
                     return 1;
                 }
 
