@@ -11,7 +11,7 @@ public:
     static CModeMgr& instance();
 
     bool switch_mode(ModeType next_mode, std::string_view initial_map = "login.rsw");
-    bool process();
+    int run(ModeType initial_mode, std::string_view initial_map = "login.rsw");
     intptr_t dispatch_msg(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam);
 
     [[nodiscard]] CMode* current_mode() const noexcept { return m_active_mode.get(); }
@@ -21,6 +21,9 @@ public:
 private:
     CModeMgr() = default;
     ~CModeMgr() = default;
+
+    bool activate_pending_mode();
+    void close_active_mode();
 
     std::unique_ptr<CMode> m_active_mode;
     ModeType m_pending_mode{ModeType::None};

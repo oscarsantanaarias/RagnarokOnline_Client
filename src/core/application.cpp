@@ -2,10 +2,10 @@
 #include "ro/core/exception_handler.hpp"
 #include "ro/mode/mode_mgr.hpp"
 #include "ro/resource/resource_mgr.hpp"
+#include <objbase.h>
 #include <timeapi.h>
 #include <iostream>
 #include <fstream>
-#include <chrono>
 
 namespace ro::core {
 
@@ -119,59 +119,13 @@ bool Application::initialize() {
     ShowWindow(m_hwnd, m_show_cmd);
     UpdateWindow(m_hwnd);
 
-    dbg << "Step 9: Switch mode..." << std::endl;
-    dbg.flush();
-    // 9. Initialize Mode Manager with Login Mode (login.rsw)
-    if (!mode::CModeMgr::instance().switch_mode(mode::ModeType::Login, "login.rsw")) {
-        dbg << "Failed at switch_mode" << std::endl;
-        return false;
-    }
-
     dbg << "Initialization Success!" << std::endl;
     dbg.flush();
     return true;
 }
 
 int Application::run() {
-    MSG msg{};
-    bool running = true;
-
-    using clock = std::chrono::steady_clock;
-    constexpr auto frame_time = std::chrono::microseconds(1000000 / 60); // 60 FPS (16,666 us)
-    auto next_frame = clock::now();
-
-    while (running) {
-        // Process Windows messages
-        while (PeekMessageA(&msg, nullptr, 0, 0, PM_REMOVE)) {
-            if (msg.message == WM_QUIT) {
-                running = false;
-                break;
-            }
-            TranslateMessage(&msg);
-            DispatchMessageA(&msg);
-        }
-
-        if (!running) break;
-
-        // Execute active Game Mode frame tick
-        if (!mode::CModeMgr::instance().process()) {
-            running = false;
-        }
-
-        // 60 FPS frame limiter
-        next_frame += frame_time;
-        const auto now = clock::now();
-        if (now < next_frame) {
-            const auto sleep_ms = std::chrono::duration_cast<std::chrono::milliseconds>(next_frame - now).count();
-            if (sleep_ms > 0) {
-                Sleep(static_cast<DWORD>(sleep_ms));
-            }
-        } else {
-            next_frame = now;
-        }
-    }
-
-    return static_cast<int>(msg.wParam);
+    return mode::CModeMgr::instance().run(mode::ModeType::Login, "login.rsw");
 }
 
 LRESULT CALLBACK Application::window_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {

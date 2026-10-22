@@ -180,6 +180,7 @@
     <ClInclude Include="include\ro\resource\spr.hpp" />
     <ClInclude Include="include\ro\world\gat.hpp" />
     <ClInclude Include="include\ro\world\gnd.hpp" />
+    <ClInclude Include="include\ro\world\rsm.hpp" />
     <ClInclude Include="include\ro\world\rsw.hpp" />
   </ItemGroup>
   <ItemGroup>
@@ -201,6 +202,7 @@
     <ClCompile Include="src\resource\spr.cpp" />
     <ClCompile Include="src\world\gat.cpp" />
     <ClCompile Include="src\world\gnd.cpp" />
+    <ClCompile Include="src\world\rsm.cpp" />
     <ClCompile Include="src\world\rsw.cpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

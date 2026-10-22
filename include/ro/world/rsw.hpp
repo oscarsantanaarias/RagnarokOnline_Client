@@ -6,6 +6,7 @@
 #include <vector>
 #include <span>
 #include <optional>
+#include <filesystem>
 
 namespace ro::world {
 
@@ -16,15 +17,22 @@ enum class RswObjectType : int32_t {
     Effect = 4
 };
 
+#ifndef RO_WORLD_VEC3_DEFINED
+#define RO_WORLD_VEC3_DEFINED
 struct Vec3 {
     float x{0.0f};
     float y{0.0f};
     float z{0.0f};
 };
+#endif
 
 struct RswModelObject {
     std::string name;
+    int32_t anim_type{0};
+    float anim_speed{1.0f};
+    int32_t block_type{0};
     std::string filename; // Path to .rsm 3D model
+    std::string nodename;
     Vec3 position{};
     Vec3 rotation{};
     Vec3 scale{1.0f, 1.0f, 1.0f};
@@ -53,6 +61,7 @@ struct RswEffectObject {
     Vec3 position{};
     int32_t effect_id{0};
     float emit_speed{1.0f};
+    float param[4]{0.0f, 0.0f, 0.0f, 0.0f};
 };
 
 class RswMap {
@@ -60,6 +69,7 @@ public:
     RswMap() = default;
 
     [[nodiscard]] static std::optional<RswMap> load_from_memory(std::span<const uint8_t> buffer);
+    [[nodiscard]] static std::optional<RswMap> load_from_file(const std::filesystem::path& file_path);
 
     [[nodiscard]] uint16_t version() const noexcept { return m_version; }
     [[nodiscard]] const std::string& gnd_filename() const noexcept { return m_gnd_file; }
@@ -74,6 +84,7 @@ public:
 
 private:
     uint16_t m_version{0x0201};
+    std::string m_ini_file;
     std::string m_gnd_file;
     std::string m_gat_file;
     std::string m_bgm_file;
@@ -83,6 +94,12 @@ private:
     float m_wave_height{0.0f};
     float m_wave_speed{0.0f};
     float m_wave_pitch{0.0f};
+    float m_water_anim_speed{0.0f};
+
+    int32_t m_light_longitude{45};
+    int32_t m_light_latitude{45};
+    Vec3 m_diffuse_color{1.0f, 1.0f, 1.0f};
+    Vec3 m_ambient_color{0.3f, 0.3f, 0.3f};
 
     std::vector<RswModelObject> m_models;
     std::vector<RswLightObject> m_lights;
@@ -91,4 +108,3 @@ private:
 };
 
 } // namespace ro::world
-

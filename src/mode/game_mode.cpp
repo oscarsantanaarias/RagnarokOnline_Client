@@ -3,9 +3,7 @@
 namespace ro::mode {
 
 CGameMode::CGameMode() = default;
-CGameMode::~CGameMode() {
-    on_exit();
-}
+CGameMode::~CGameMode() = default;
 
 bool CGameMode::on_init(std::string_view map_name) {
     m_map_name = map_name;

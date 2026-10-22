@@ -92,6 +92,9 @@
     <ClCompile Include="src\world\gnd.cpp">
       <Filter>Source Files\world</Filter>
     </ClCompile>
+    <ClCompile Include="src\world\rsm.cpp">
+      <Filter>Source Files\world</Filter>
+    </ClCompile>
     <ClCompile Include="src\world\rsw.cpp">
       <Filter>Source Files\world</Filter>
     </ClCompile>
@@ -149,6 +152,9 @@
       <Filter>Header Files\ro\world</Filter>
     </ClInclude>
     <ClInclude Include="include\ro\world\gnd.hpp">
+      <Filter>Header Files\ro\world</Filter>
+    </ClInclude>
+    <ClInclude Include="include\ro\world\rsm.hpp">
       <Filter>Header Files\ro\world</Filter>
     </ClInclude>
     <ClInclude Include="include\ro\world\rsw.hpp">

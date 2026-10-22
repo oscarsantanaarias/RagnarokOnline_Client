@@ -7,8 +7,11 @@
 #include "ro/actor/actor.hpp"
 #include "ro/world/gat.hpp"
 #include "ro/world/gnd.hpp"
+#include "ro/world/rsw.hpp"
+#include "ro/world/rsm.hpp"
 #include <memory>
 #include <string>
+#include <unordered_map>
 
 namespace ro::mode {
 
@@ -29,15 +32,38 @@ public:
 
 private:
     void load_character_assets();
+    void load_world_scenery();
+    void load_cursor_assets();
+    void draw_cursor();
+    void draw_fade_overlay();
+    void process_screenshot();
 
     std::string m_map_name{"prontera.gat"};
-    int32_t m_state{0};
+    int32_t m_state{3};
+    int32_t m_pending_state{-1};
+    uint32_t m_frame_count{0};
     bool m_is_running{false};
     HWND m_hwnd{nullptr};
+
+    // Fade-in overlay (sub_AD6740)
+    bool m_fade_active{true};
+    uint32_t m_fade_start_time{0};
+
+    // Screenshot capture (sub_AD6A40)
+    bool m_screenshot_requested{false};
+
+    // Animated mouse cursor (sub_AD5520)
+    std::shared_ptr<resource::SprResource> m_cursor_spr;
+    std::shared_ptr<resource::ActResource> m_cursor_act;
+    int32_t m_cursor_type{0};
+    int32_t m_cursor_x{0};
+    int32_t m_cursor_y{0};
 
     std::unique_ptr<render::SoftwareRenderer> m_renderer;
     std::unique_ptr<world::GatCollision> m_collision;
     std::unique_ptr<world::GndMap> m_gnd;
+    std::unique_ptr<world::RswMap> m_rsw;
+    std::unordered_map<std::string, std::shared_ptr<world::RsmModel>> m_model_cache;
 
     std::shared_ptr<resource::SprResource> m_body_spr;
     std::shared_ptr<resource::ActResource> m_body_act;

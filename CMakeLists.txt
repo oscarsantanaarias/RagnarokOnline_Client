@@ -30,13 +30,18 @@ set(RO_SOURCES
     src/mode/login_mode.cpp
     src/mode/game_mode.cpp
     src/resource/grf.cpp
+    src/resource/inflate.cpp
     src/resource/resource_mgr.cpp
     src/resource/spr.cpp
     src/resource/act.cpp
     src/world/gat.cpp
+    src/world/gnd.cpp
     src/world/rsw.cpp
+    src/world/rsm.cpp
+    src/resource/bmp.cpp
     src/actor/actor.cpp
     src/camera/camera.cpp
+    src/render/renderer.cpp
 )
 
 add_executable(Ragexe WIN32 ${RO_SOURCES})

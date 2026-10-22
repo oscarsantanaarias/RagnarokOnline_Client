@@ -3,12 +3,17 @@
 #include "ro/core/types.hpp"
 #include "ro/resource/spr.hpp"
 #include "ro/resource/act.hpp"
+#include "ro/resource/bmp.hpp"
 #include "ro/actor/actor.hpp"
 #include "ro/world/gat.hpp"
 #include "ro/world/gnd.hpp"
+#include "ro/world/rsw.hpp"
+#include "ro/world/rsm.hpp"
 #include <windows.h>
 #include <vector>
 #include <cstdint>
+#include <unordered_map>
+#include <memory>
 
 namespace ro::render {
 
@@ -42,8 +47,52 @@ public:
         float time_sec = 0.0f
     );
 
+    // Rasterizes an affine-mapped textured 3D triangle with Z-buffer depth test and magenta/alpha transparency
+    void draw_textured_triangle(
+        float x0, float y0, float z0, float u0, float v0,
+        float x1, float y1, float z1, float u1, float v1,
+        float x2, float y2, float z2, float u2, float v2,
+        const resource::BmpImage* texture
+    );
+
+    // Renders an RSM 3D mesh model placed at world coordinates with rotation, scaling, and camera projection
+    void draw_rsm_model(
+        const world::RsmModel& model,
+        float rsw_x,
+        float rsw_y,
+        float rsw_z,
+        float scale_x,
+        float scale_y,
+        float scale_z,
+        float rot_x,
+        float rot_y,
+        float rot_z,
+        float cam_x,
+        float cam_y,
+        float zoom,
+        float yaw_deg,
+        float pitch_deg
+    );
+
+    // Renders all world scenery objects from the RSW file within camera range
+    void draw_map_scenery(
+        const world::RswMap& rsw,
+        const std::unordered_map<std::string, std::shared_ptr<world::RsmModel>>& model_cache,
+        float cam_x,
+        float cam_y,
+        float zoom,
+        float yaw_deg,
+        float pitch_deg
+    );
+
+    // Draws a solid or alpha-blended rectangle (sub_54E460)
+    void draw_rect(int32_t x, int32_t y, int32_t w, int32_t h, uint32_t argb_color);
+
     // Presents framebuffer to window HDC
     void present(HWND hwnd);
+
+    // Saves current framebuffer to a 32-bit BMP image on disk
+    bool save_to_bmp(const std::filesystem::path& path) const;
 
     [[nodiscard]] uint32_t width() const noexcept { return m_width; }
     [[nodiscard]] uint32_t height() const noexcept { return m_height; }
@@ -52,6 +101,7 @@ private:
     uint32_t m_width{1024};
     uint32_t m_height{768};
     std::vector<uint32_t> m_pixels; // XRGB32
+    std::vector<float> m_depth_buffer; // Z-buffer (depth along camera view direction)
     BITMAPINFO m_bmi{};
 };
 

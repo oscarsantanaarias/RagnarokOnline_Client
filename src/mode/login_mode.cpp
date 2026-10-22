@@ -23,9 +23,7 @@ static actor::Direction direction_from_world_delta(float dx, float dy) {
 
 CLoginMode::CLoginMode() = default;
 
-CLoginMode::~CLoginMode() {
-    on_exit();
-}
+CLoginMode::~CLoginMode() = default;
 
 void CLoginMode::load_character_assets() {
     std::ofstream dbg("debug_login.log", std::ios::app);
@@ -125,13 +123,142 @@ void CLoginMode::load_character_assets() {
     dbg << "Warning: No presets could be loaded" << std::endl;
 }
 
+void CLoginMode::load_world_scenery() {
+    std::ofstream dbg("debug_login.log", std::ios::app);
+    dbg << "Loading world scenery (prontera.rsw)..." << std::endl;
+
+    auto rsw_opt = world::RswMap::load_from_file("data/prontera.rsw");
+    if (!rsw_opt) {
+        rsw_opt = world::RswMap::load_from_file("prontera.rsw");
+    }
+
+    if (!rsw_opt) {
+        dbg << "Failed to load prontera.rsw" << std::endl;
+        return;
+    }
+
+    m_rsw = std::make_unique<world::RswMap>(std::move(*rsw_opt));
+    dbg << "RSW loaded successfully! Models: " << m_rsw->models().size()
+        << ", Lights: " << m_rsw->lights().size()
+        << ", Sounds: " << m_rsw->sounds().size()
+        << ", Effects: " << m_rsw->effects().size() << std::endl;
+
+    // Load unique .rsm 3D models into cache
+    for (const auto& obj : m_rsw->models()) {
+        if (obj.filename.empty() || m_model_cache.contains(obj.filename)) {
+            continue;
+        }
+
+        // Convert ANSI/EUC-KR to native wchar_t path
+        std::wstring wide;
+        for (char c : obj.filename) {
+            wide.push_back(static_cast<wchar_t>(static_cast<uint8_t>(c)));
+        }
+
+        std::filesystem::path rel_path(wide);
+        std::filesystem::path full_path = std::filesystem::path("data/model") / rel_path;
+
+        auto model_opt = world::RsmModel::load_from_file(full_path, "data/texture");
+        if (!model_opt) {
+            std::string clean = obj.filename;
+            while (!clean.empty() && (clean.front() == '\\' || clean.front() == '/')) {
+                clean.erase(0, 1);
+            }
+            std::wstring clean_w;
+            for (char c : clean) clean_w.push_back(static_cast<wchar_t>(static_cast<uint8_t>(c)));
+            full_path = std::filesystem::path("data/model") / std::filesystem::path(clean_w);
+            model_opt = world::RsmModel::load_from_file(full_path, "data/texture");
+        }
+
+        if (model_opt) {
+            m_model_cache[obj.filename] = std::make_shared<world::RsmModel>(std::move(*model_opt));
+        }
+    }
+
+    dbg << "Total unique models loaded into cache: " << m_model_cache.size() << std::endl;
+}
+
+void CLoginMode::load_cursor_assets() {
+    auto& res = resource::ResourceManager::instance();
+    auto spr_bytes = res.read_file("data\\sprite\\cursors.spr");
+    if (spr_bytes.empty()) spr_bytes = res.read_file("sprite\\cursors.spr");
+    auto act_bytes = res.read_file("data\\sprite\\cursors.act");
+    if (act_bytes.empty()) act_bytes = res.read_file("sprite\\cursors.act");
+
+    if (!spr_bytes.empty() && !act_bytes.empty()) {
+        auto spr = resource::SprResource::load_from_memory(spr_bytes);
+        auto act = resource::ActResource::load_from_memory(act_bytes);
+        if (spr && act) {
+            m_cursor_spr = std::make_shared<resource::SprResource>(std::move(*spr));
+            m_cursor_act = std::make_shared<resource::ActResource>(std::move(*act));
+        }
+    }
+}
+
+void CLoginMode::draw_cursor() {
+    if (!m_cursor_spr || !m_cursor_act) return;
+    const size_t act_idx = static_cast<size_t>(m_cursor_type);
+    if (act_idx >= m_cursor_act->action_count()) return;
+
+    const auto& action = m_cursor_act->actions()[act_idx];
+    if (action.motions.empty()) return;
+
+    // Timing matching official sub_AD5520: tick / 24ms
+    const uint32_t ticks = (timeGetTime() - m_fade_start_time) / 24;
+    const size_t motion_idx = (ticks / 4) % action.motions.size();
+    const auto& motion = action.motions[motion_idx];
+
+    for (const auto& clip : motion.clips) {
+        if (clip.spr_index < 0) continue;
+        m_renderer->draw_sprite(
+            *m_cursor_spr,
+            static_cast<size_t>(clip.spr_index),
+            m_cursor_x + clip.x,
+            m_cursor_y + clip.y,
+            clip.mirror != 0,
+            clip.color,
+            1.0f
+        );
+    }
+}
+
+void CLoginMode::draw_fade_overlay() {
+    if (!m_fade_active || !m_renderer) return;
+    const uint32_t now = timeGetTime();
+    const uint32_t elapsed = now - m_fade_start_time;
+    if (elapsed < 255) {
+        const uint32_t alpha = 255 - elapsed;
+        m_renderer->draw_rect(0, 0, m_renderer->width(), m_renderer->height(), (alpha << 24));
+    } else {
+        m_fade_active = false;
+    }
+}
+
+void CLoginMode::process_screenshot() {
+    if (!m_screenshot_requested || !m_renderer) return;
+    m_screenshot_requested = false;
+
+    SYSTEMTIME st{};
+    GetLocalTime(&st);
+    std::filesystem::create_directories("ScreenShot");
+
+    char buf[128];
+    std::snprintf(buf, sizeof(buf), "ScreenShot/Screen%04d%02d%02d_%02d%02d%02d.bmp",
+                  st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
+
+    m_renderer->save_to_bmp(buf);
+}
+
 bool CLoginMode::on_init(std::string_view map_name) {
     std::ofstream dbg("debug_login.log");
     dbg << "LoginMode on_init started" << std::endl;
 
     m_map_name = map_name.empty() ? "prontera.gat" : std::string(map_name);
-    m_state = 0;
+    m_state = 3;
+    m_pending_state = -1;
+    m_frame_count = 0;
     m_is_running = true;
+    on_change_state(m_state);
 
     // Allocate 1024x768 32-bit software framebuffer
     dbg << "Creating SoftwareRenderer (1024x768)" << std::endl;
@@ -197,18 +324,24 @@ bool CLoginMode::on_init(std::string_view map_name) {
     }
 
     // Default character spawn at Prontera central plaza
-    m_world_cell_x = 156.0f;
-    m_world_cell_y = 180.0f;
-    m_target_cell_x = 156.0f;
-    m_target_cell_y = 180.0f;
+    m_world_cell_x = 157.5f;
+    m_world_cell_y = 198.4f;
+    m_target_cell_x = 157.5f;
+    m_target_cell_y = 198.4f;
     m_zoom = 1.0f;
     m_camera_yaw = 0.0f;
     m_camera_pitch = 45.0f;
+    m_dir = actor::Direction::NorthEast;
 
     dbg << "Loading character assets" << std::endl;
     dbg.close();
 
     load_character_assets();
+    load_world_scenery();
+    load_cursor_assets();
+
+    m_fade_start_time = timeGetTime();
+    m_fade_active = true;
 
     dbg.open("debug_login.log", std::ios::app);
     dbg << "LoginMode on_init completed" << std::endl;
@@ -226,6 +359,12 @@ bool CLoginMode::on_run() {
 
 bool CLoginMode::on_update(float delta_time) {
     if (!m_is_running) return false;
+
+    if (m_pending_state >= 0) {
+        const int32_t next_state = m_pending_state;
+        m_pending_state = -1;
+        on_change_state(next_state);
+    }
 
     m_elapsed_time += delta_time;
 
@@ -305,6 +444,7 @@ bool CLoginMode::on_update(float delta_time) {
         m_anim_timer = 0.0f;
     }
 
+    ++m_frame_count;
     return true;
 }
 
@@ -332,7 +472,20 @@ void CLoginMode::on_draw() {
         );
     }
 
-    // 3. Draw animated character at screen center with zoom scaling and camera rotation
+    // 3. Draw 3D world scenery models (buildings, houses, walls, trees, fountains, lanterns)
+    if (m_rsw && !m_model_cache.empty()) {
+        m_renderer->draw_map_scenery(
+            *m_rsw,
+            m_model_cache,
+            m_world_cell_x,
+            m_world_cell_y,
+            m_zoom,
+            m_camera_yaw,
+            m_camera_pitch
+        );
+    }
+
+    // 4. Draw animated character at screen center with zoom scaling and camera rotation
     const int32_t center_x = static_cast<int32_t>(m_renderer->width() / 2);
     const int32_t center_y = static_cast<int32_t>(m_renderer->height() / 2);
 
@@ -352,8 +505,21 @@ void CLoginMode::on_draw() {
         );
     }
 
-    // 4. Present backbuffer to Win32 GDI
+    // 5. Fade-in overlay (sub_AD6740)
+    draw_fade_overlay();
+
+    // 6. Animated mouse cursor (sub_AD5520)
+    draw_cursor();
+
+    // 7. Process screenshot if requested (sub_AD6A40)
+    process_screenshot();
+
+    // 8. Present backbuffer to Win32 GDI
     if (m_hwnd) {
+        if (m_frame_count == 25) {
+            m_renderer->save_to_bmp("prontera_render.bmp");
+        }
+
         m_renderer->present(m_hwnd);
 
         // Overlay status text and click indicator via GDI
@@ -505,6 +671,8 @@ intptr_t CLoginMode::on_msg(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
         case WM_MOUSEMOVE: {
             const int16_t mouse_x = static_cast<int16_t>(LOWORD(lparam));
             const int16_t mouse_y = static_cast<int16_t>(HIWORD(lparam));
+            m_cursor_x = mouse_x;
+            m_cursor_y = mouse_y;
 
             if (m_is_rotating_cam) {
                 const float delta_x = static_cast<float>(mouse_x - m_last_mouse_x);
@@ -550,6 +718,11 @@ intptr_t CLoginMode::on_msg(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 
         case WM_KEYDOWN:
             switch (wparam) {
+                // Screenshot key (sub_AD6A40)
+                case VK_SNAPSHOT: {
+                    m_screenshot_requested = true;
+                    return 1;
+                }
                 // Zoom hotkeys
                 case VK_OEM_PLUS:
                 case VK_ADD:

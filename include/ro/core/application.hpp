@@ -16,7 +16,7 @@ public:
     // Initializes Windows window, Mutex, ExceptionHandler, and GRF filesystem
     bool initialize();
 
-    // Runs the main game loop (PeekMessage + CModeMgr::process)
+    // Enters CModeMgr with the original initial mode/map pair.
     int run();
 
     [[nodiscard]] HWND window_handle() const noexcept { return m_hwnd; }
