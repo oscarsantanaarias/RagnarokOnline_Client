@@ -173,11 +173,13 @@
     <ClInclude Include="include\ro\mode\mode_mgr.hpp" />
     <ClInclude Include="include\ro\render\renderer.hpp" />
     <ClInclude Include="include\ro\resource\act.hpp" />
+    <ClInclude Include="include\ro\resource\bmp.hpp" />
     <ClInclude Include="include\ro\resource\grf.hpp" />
     <ClInclude Include="include\ro\resource\inflate.hpp" />
     <ClInclude Include="include\ro\resource\resource_mgr.hpp" />
     <ClInclude Include="include\ro\resource\spr.hpp" />
     <ClInclude Include="include\ro\world\gat.hpp" />
+    <ClInclude Include="include\ro\world\gnd.hpp" />
     <ClInclude Include="include\ro\world\rsw.hpp" />
   </ItemGroup>
   <ItemGroup>
@@ -192,11 +194,13 @@
     <ClCompile Include="src\mode\mode_mgr.cpp" />
     <ClCompile Include="src\render\renderer.cpp" />
     <ClCompile Include="src\resource\act.cpp" />
+    <ClCompile Include="src\resource\bmp.cpp" />
     <ClCompile Include="src\resource\grf.cpp" />
     <ClCompile Include="src\resource\inflate.cpp" />
     <ClCompile Include="src\resource\resource_mgr.cpp" />
     <ClCompile Include="src\resource\spr.cpp" />
     <ClCompile Include="src\world\gat.cpp" />
+    <ClCompile Include="src\world\gnd.cpp" />
     <ClCompile Include="src\world\rsw.cpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

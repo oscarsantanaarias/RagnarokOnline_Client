@@ -71,6 +71,9 @@
     <ClCompile Include="src\resource\act.cpp">
       <Filter>Source Files\resource</Filter>
     </ClCompile>
+    <ClCompile Include="src\resource\bmp.cpp">
+      <Filter>Source Files\resource</Filter>
+    </ClCompile>
     <ClCompile Include="src\resource\grf.cpp">
       <Filter>Source Files\resource</Filter>
     </ClCompile>
@@ -84,6 +87,9 @@
       <Filter>Source Files\resource</Filter>
     </ClCompile>
     <ClCompile Include="src\world\gat.cpp">
+      <Filter>Source Files\world</Filter>
+    </ClCompile>
+    <ClCompile Include="src\world\gnd.cpp">
       <Filter>Source Files\world</Filter>
     </ClCompile>
     <ClCompile Include="src\world\rsw.cpp">
@@ -124,6 +130,9 @@
     <ClInclude Include="include\ro\resource\act.hpp">
       <Filter>Header Files\ro\resource</Filter>
     </ClInclude>
+    <ClInclude Include="include\ro\resource\bmp.hpp">
+      <Filter>Header Files\ro\resource</Filter>
+    </ClInclude>
     <ClInclude Include="include\ro\resource\grf.hpp">
       <Filter>Header Files\ro\resource</Filter>
     </ClInclude>
@@ -137,6 +146,9 @@
       <Filter>Header Files\ro\resource</Filter>
     </ClInclude>
     <ClInclude Include="include\ro\world\gat.hpp">
+      <Filter>Header Files\ro\world</Filter>
+    </ClInclude>
+    <ClInclude Include="include\ro\world\gnd.hpp">
       <Filter>Header Files\ro\world</Filter>
     </ClInclude>
     <ClInclude Include="include\ro\world\rsw.hpp">

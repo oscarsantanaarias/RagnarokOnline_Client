@@ -137,7 +137,7 @@ bool CLoginMode::on_init(std::string_view map_name) {
     dbg << "Creating SoftwareRenderer (1024x768)" << std::endl;
     m_renderer = std::make_unique<render::SoftwareRenderer>(1024, 768);
 
-    // Load ground collision map (Prontera GAT)
+    // 1. Load ground collision map (Prontera GAT)
     auto& res = resource::ResourceManager::instance();
     auto gat_bytes = res.read_file("data\\prontera.gat");
     if (gat_bytes.empty()) {
@@ -160,9 +160,6 @@ bool CLoginMode::on_init(std::string_view map_name) {
         if (!f.is_open()) {
             f.open("prontera.gat", std::ios::binary | std::ios::ate);
         }
-        if (!f.is_open()) {
-            f.open("data/pprontera.gat", std::ios::binary | std::ios::ate);
-        }
         if (f.is_open()) {
             const auto size = f.tellg();
             f.seekg(0, std::ios::beg);
@@ -176,12 +173,37 @@ bool CLoginMode::on_init(std::string_view map_name) {
         }
     }
 
+    // 2. Load ground textures and mesh (Prontera GND)
+    dbg << "Loading Prontera ground mesh and textures (prontera.gnd)..." << std::endl;
+    auto gnd_opt = world::GndMap::load_from_file("data/prontera.gnd", "data/texture");
+    if (!gnd_opt) {
+        gnd_opt = world::GndMap::load_from_file("prontera.gnd", "data/texture");
+    }
+
+    if (gnd_opt) {
+        m_gnd = std::make_unique<world::GndMap>(std::move(*gnd_opt));
+        dbg << "GndMap loaded successfully! Dimensions: " << m_gnd->width() << "x" << m_gnd->height() << std::endl;
+    } else {
+        dbg << "Notice: prontera.gnd could not be opened directly, trying memory buffer..." << std::endl;
+        auto gnd_bytes = res.read_file("data\\prontera.gnd");
+        if (gnd_bytes.empty()) gnd_bytes = res.read_file("prontera.gnd");
+        if (!gnd_bytes.empty()) {
+            auto mem_gnd = world::GndMap::load_from_memory(gnd_bytes, "data/texture");
+            if (mem_gnd) {
+                m_gnd = std::make_unique<world::GndMap>(std::move(*mem_gnd));
+                dbg << "GndMap loaded via ResourceManager! Dimensions: " << m_gnd->width() << "x" << m_gnd->height() << std::endl;
+            }
+        }
+    }
+
     // Default character spawn at Prontera central plaza
     m_world_cell_x = 156.0f;
     m_world_cell_y = 180.0f;
     m_target_cell_x = 156.0f;
     m_target_cell_y = 180.0f;
     m_zoom = 1.0f;
+    m_camera_yaw = 0.0f;
+    m_camera_pitch = 45.0f;
 
     dbg << "Loading character assets" << std::endl;
     dbg.close();
@@ -227,9 +249,9 @@ bool CLoginMode::on_update(float delta_time) {
             m_frame_delay = 0.20f;
             m_motion_idx = 0;
         } else {
-            // Walking towards target
+            // Walking towards target in world coordinates
             m_action = actor::ActionType::Walk;
-            m_frame_delay = 0.09f; // Authentic RO walking speed
+            m_frame_delay = 0.09f;
             m_dir = direction_from_world_delta(dx, dy);
 
             const float step = m_cell_move_speed * delta_time;
@@ -293,15 +315,23 @@ void CLoginMode::on_draw() {
         m_hwnd = FindWindowA("Ragnarok", nullptr);
     }
 
-    // 1. Clear background to dark stone
+    // 1. Clear background
     m_renderer->clear(0x001B1C24);
 
-    // 2. Draw ground map centered on player world cell
+    // 2. Draw textured ground map centered on player world cell with camera rotation
     if (m_collision) {
-        m_renderer->draw_map_ground(*m_collision, m_world_cell_x, m_world_cell_y, m_zoom, m_elapsed_time);
+        m_renderer->draw_map_ground(
+            *m_collision,
+            m_gnd.get(),
+            m_world_cell_x,
+            m_world_cell_y,
+            m_zoom,
+            m_camera_yaw,
+            m_elapsed_time
+        );
     }
 
-    // 3. Draw animated character at screen center with zoom scaling
+    // 3. Draw animated character at screen center with zoom scaling and camera rotation
     const int32_t center_x = static_cast<int32_t>(m_renderer->width() / 2);
     const int32_t center_y = static_cast<int32_t>(m_renderer->height() / 2);
 
@@ -316,7 +346,8 @@ void CLoginMode::on_draw() {
             m_motion_idx,
             center_x,
             center_y,
-            m_zoom
+            m_zoom,
+            m_camera_yaw
         );
     }
 
@@ -337,23 +368,31 @@ void CLoginMode::on_draw() {
             const char* act_names[] = { "Idle", "Walk", "Sit", "PickUp", "ReadyFight", "Attack", "Hurt", "Freeze", "Dead", "Special" };
 
             const std::string status = std::format(
-                "Map: Prontera | Cell: ({:.1f}, {:.1f}) | Zoom: {:.2f}x | Dir: {} | Action: {}",
-                m_world_cell_x, m_world_cell_y, m_zoom,
+                "Map: Prontera | Cell: ({:.1f}, {:.1f}) | Zoom: {:.2f}x | Cam Yaw: {:.0f}\xC2\xB0 | Dir: {} | Action: {}",
+                m_world_cell_x, m_world_cell_y, m_zoom, m_camera_yaw,
                 dir_names[static_cast<size_t>(m_dir) % 8],
                 (static_cast<size_t>(m_action) < 10) ? act_names[static_cast<size_t>(m_action)] : "Unknown"
             );
             TextOutA(hdc, 20, 45, status.c_str(), static_cast<int>(status.size()));
 
             SetTextColor(hdc, RGB(180, 225, 255));
-            const std::string hint = "Controls: Mouse Wheel / [+][-] / PgUp/PgDn = Zoom | Click to Walk | WASD = Move | Space = Action";
+            const std::string hint = "Controls: Right-Click + Drag = Rotate Camera | Left-Click = Walk | Wheel = Zoom | Space = Action";
             TextOutA(hdc, 20, 70, hint.c_str(), static_cast<int>(hint.size()));
 
-            // Draw RO Green Click Ring Indicator in screen coordinates
+            // Draw RO Green Click Ring Indicator in rotated camera space
             if (m_click_timer > 0.0f) {
                 const float base_cell_size = 28.0f;
                 const float cell_size = base_cell_size * m_zoom;
-                const float click_sx = center_x + (m_target_cell_x - m_world_cell_x) * cell_size;
-                const float click_sy = center_y + (m_world_cell_y - m_target_cell_y) * cell_size;
+
+                const float dx = m_target_cell_x - m_world_cell_x;
+                const float dy = m_target_cell_y - m_world_cell_y;
+
+                const float rad = m_camera_yaw * (3.1415926535f / 180.0f);
+                const float rx = dx * std::cos(rad) - dy * std::sin(rad);
+                const float ry = dx * std::sin(rad) + dy * std::cos(rad);
+
+                const float click_sx = center_x + rx * cell_size;
+                const float click_sy = center_y - ry * cell_size;
 
                 HPEN greenPen = CreatePen(PS_SOLID, 2, RGB(80, 255, 100));
                 HGDIOBJ oldPen = SelectObject(hdc, greenPen);
@@ -388,16 +427,48 @@ intptr_t CLoginMode::on_msg(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
             return 1;
         }
 
+        // Camera Rotation (Right Mouse Button Drag)
+        case WM_RBUTTONDOWN: {
+            m_is_rotating_cam = true;
+            m_last_mouse_x = static_cast<int16_t>(LOWORD(lparam));
+            m_last_mouse_y = static_cast<int16_t>(HIWORD(lparam));
+            SetCapture(hwnd);
+            return 1;
+        }
+
+        case WM_RBUTTONUP: {
+            m_is_rotating_cam = false;
+            ReleaseCapture();
+            return 1;
+        }
+
+        case WM_RBUTTONDBLCLK: {
+            // Reset camera orientation to default North view
+            m_camera_yaw = 0.0f;
+            m_camera_pitch = 45.0f;
+            return 1;
+        }
+
+        // Navigation (Left Mouse Button Click)
         case WM_LBUTTONDOWN: {
-            const float sx = static_cast<float>(LOWORD(lparam));
-            const float sy = static_cast<float>(HIWORD(lparam));
+            const float sx = static_cast<float>(static_cast<int16_t>(LOWORD(lparam)));
+            const float sy = static_cast<float>(static_cast<int16_t>(HIWORD(lparam)));
             const float center_sx = m_renderer ? (m_renderer->width() * 0.5f) : 512.0f;
             const float center_sy = m_renderer ? (m_renderer->height() * 0.5f) : 384.0f;
             const float base_cell_size = 28.0f;
             const float cell_size = base_cell_size * m_zoom;
 
-            m_target_cell_x = m_world_cell_x + (sx - center_sx) / cell_size;
-            m_target_cell_y = m_world_cell_y - (sy - center_sy) / cell_size;
+            // Screen delta relative to screen center
+            const float rx = (sx - center_sx) / cell_size;
+            const float ry = (center_sy - sy) / cell_size;
+
+            // Unrotate by -yaw angle to get continuous world cell coordinates
+            const float rad = -m_camera_yaw * (3.1415926535f / 180.0f);
+            const float wx = rx * std::cos(rad) - ry * std::sin(rad);
+            const float wy = rx * std::sin(rad) + ry * std::cos(rad);
+
+            m_target_cell_x = m_world_cell_x + wx;
+            m_target_cell_y = m_world_cell_y + wy;
             m_is_moving = true;
             m_click_screen_x = sx;
             m_click_screen_y = sy;
@@ -406,23 +477,50 @@ intptr_t CLoginMode::on_msg(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
         }
 
         case WM_MOUSEMOVE: {
+            const int16_t mouse_x = static_cast<int16_t>(LOWORD(lparam));
+            const int16_t mouse_y = static_cast<int16_t>(HIWORD(lparam));
+
+            if (m_is_rotating_cam) {
+                const float delta_x = static_cast<float>(mouse_x - m_last_mouse_x);
+                const float delta_y = static_cast<float>(mouse_y - m_last_mouse_y);
+
+                m_camera_yaw += delta_x * 0.45f;
+                while (m_camera_yaw < 0.0f) m_camera_yaw += 360.0f;
+                while (m_camera_yaw >= 360.0f) m_camera_yaw -= 360.0f;
+
+                m_camera_pitch = std::clamp(m_camera_pitch + delta_y * 0.35f, 20.0f, 85.0f);
+
+                m_last_mouse_x = mouse_x;
+                m_last_mouse_y = mouse_y;
+                return 1;
+            }
+
             if (wparam & MK_LBUTTON) {
-                const float sx = static_cast<float>(LOWORD(lparam));
-                const float sy = static_cast<float>(HIWORD(lparam));
+                const float sx = static_cast<float>(mouse_x);
+                const float sy = static_cast<float>(mouse_y);
                 const float center_sx = m_renderer ? (m_renderer->width() * 0.5f) : 512.0f;
                 const float center_sy = m_renderer ? (m_renderer->height() * 0.5f) : 384.0f;
                 const float base_cell_size = 28.0f;
                 const float cell_size = base_cell_size * m_zoom;
 
-                m_target_cell_x = m_world_cell_x + (sx - center_sx) / cell_size;
-                m_target_cell_y = m_world_cell_y - (sy - center_sy) / cell_size;
+                const float rx = (sx - center_sx) / cell_size;
+                const float ry = (center_sy - sy) / cell_size;
+
+                const float rad = -m_camera_yaw * (3.1415926535f / 180.0f);
+                const float wx = rx * std::cos(rad) - ry * std::sin(rad);
+                const float wy = rx * std::sin(rad) + ry * std::cos(rad);
+
+                m_target_cell_x = m_world_cell_x + wx;
+                m_target_cell_y = m_world_cell_y + wy;
                 m_is_moving = true;
+                return 1;
             }
-            return 1;
+            break;
         }
 
         case WM_KEYDOWN:
             switch (wparam) {
+                // Zoom hotkeys
                 case VK_OEM_PLUS:
                 case VK_ADD:
                 case VK_PRIOR: { // Page Up
@@ -439,33 +537,52 @@ intptr_t CLoginMode::on_msg(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
                 case VK_NUMPAD0:
                 case 'R': {
                     m_zoom = 1.0f;
+                    m_camera_yaw = 0.0f;
                     return 1;
                 }
+
+                // Keyboard camera rotation
+                case 'Q': {
+                    m_camera_yaw -= 15.0f;
+                    if (m_camera_yaw < 0.0f) m_camera_yaw += 360.0f;
+                    return 1;
+                }
+                case 'E': {
+                    m_camera_yaw += 15.0f;
+                    if (m_camera_yaw >= 360.0f) m_camera_yaw -= 360.0f;
+                    return 1;
+                }
+
+                // WASD relative to current camera yaw
                 case VK_LEFT:
                 case 'A': {
-                    m_target_cell_x = m_world_cell_x - 3.0f;
-                    m_target_cell_y = m_world_cell_y;
+                    const float rad = -m_camera_yaw * (3.1415926535f / 180.0f);
+                    m_target_cell_x = m_world_cell_x - 3.0f * std::cos(rad);
+                    m_target_cell_y = m_world_cell_y - 3.0f * std::sin(rad);
                     m_is_moving = true;
                     return 1;
                 }
                 case VK_RIGHT:
                 case 'D': {
-                    m_target_cell_x = m_world_cell_x + 3.0f;
-                    m_target_cell_y = m_world_cell_y;
+                    const float rad = -m_camera_yaw * (3.1415926535f / 180.0f);
+                    m_target_cell_x = m_world_cell_x + 3.0f * std::cos(rad);
+                    m_target_cell_y = m_world_cell_y + 3.0f * std::sin(rad);
                     m_is_moving = true;
                     return 1;
                 }
                 case VK_UP:
                 case 'W': {
-                    m_target_cell_x = m_world_cell_x;
-                    m_target_cell_y = m_world_cell_y + 3.0f;
+                    const float rad = -m_camera_yaw * (3.1415926535f / 180.0f);
+                    m_target_cell_x = m_world_cell_x - 3.0f * std::sin(rad);
+                    m_target_cell_y = m_world_cell_y + 3.0f * std::cos(rad);
                     m_is_moving = true;
                     return 1;
                 }
                 case VK_DOWN:
                 case 'S': {
-                    m_target_cell_x = m_world_cell_x;
-                    m_target_cell_y = m_world_cell_y - 3.0f;
+                    const float rad = -m_camera_yaw * (3.1415926535f / 180.0f);
+                    m_target_cell_x = m_world_cell_x + 3.0f * std::sin(rad);
+                    m_target_cell_y = m_world_cell_y - 3.0f * std::cos(rad);
                     m_is_moving = true;
                     return 1;
                 }

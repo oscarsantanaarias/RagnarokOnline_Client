@@ -6,6 +6,7 @@
 #include "ro/resource/act.hpp"
 #include "ro/actor/actor.hpp"
 #include "ro/world/gat.hpp"
+#include "ro/world/gnd.hpp"
 #include <memory>
 #include <string>
 
@@ -29,13 +30,14 @@ public:
 private:
     void load_character_assets();
 
-    std::string m_map_name{"login.rsw"};
+    std::string m_map_name{"prontera.gat"};
     int32_t m_state{0};
     bool m_is_running{false};
     HWND m_hwnd{nullptr};
 
     std::unique_ptr<render::SoftwareRenderer> m_renderer;
     std::unique_ptr<world::GatCollision> m_collision;
+    std::unique_ptr<world::GndMap> m_gnd;
 
     std::shared_ptr<resource::SprResource> m_body_spr;
     std::shared_ptr<resource::ActResource> m_body_act;
@@ -51,8 +53,13 @@ private:
     float m_frame_delay{0.20f};
     float m_elapsed_time{0.0f};
 
-    // Camera & Zoom
-    float m_zoom{1.0f}; // 0.4x (far out) to 3.0x (close up)
+    // Camera: Zoom & Rotation (Orbit Yaw and Pitch)
+    float m_zoom{1.0f}; // 0.35x to 3.5x
+    float m_camera_yaw{0.0f}; // Degrees: 0 = North (default RO angle), rotated via Right Click + drag
+    float m_camera_pitch{45.0f}; // Degrees pitch
+    bool m_is_rotating_cam{false};
+    int32_t m_last_mouse_x{0};
+    int32_t m_last_mouse_y{0};
 
     // World & Navigation (Prontera GAT map cells)
     float m_world_cell_x{156.0f};
