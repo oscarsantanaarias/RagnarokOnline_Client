@@ -1,0 +1,34 @@
+# Build directories and outputs
+bin/
+obj/
+build/
+*.exe
+*.dll
+*.so
+*.dylib
+*.a
+*.lib
+*.pdb
+*.ilk
+*.exp
+
+# Game client data and archives (do not track proprietary game assets)
+Full Client/
+*.grf
+*.rgz
+*.gpf
+*.dmp
+*.log
+
+# Visual Studio files
+.vs/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# IDE and Editor files
+.vscode/
+.idea/
+*.swp
+*~
