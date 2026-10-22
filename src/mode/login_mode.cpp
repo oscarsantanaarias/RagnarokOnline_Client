@@ -4,16 +4,21 @@
 #include <fstream>
 #include <format>
 #include <cmath>
+#include <algorithm>
 
 namespace ro::mode {
 
-static actor::Direction direction_from_delta(float dx, float dy) {
-    const float angle = std::atan2(dy, dx);
-    float deg = angle * (180.0f / 3.14159265f);
-    float ro_deg = deg - 90.0f;
-    if (ro_deg < 0.0f) ro_deg += 360.0f;
-    int dir_idx = static_cast<int>((ro_deg + 22.5f) / 45.0f) % 8;
-    return static_cast<actor::Direction>(dir_idx);
+static actor::Direction direction_from_world_delta(float dx, float dy) {
+    // dy > 0 is North (+Y), dy < 0 is South (-Y)
+    // dx > 0 is East (+X), dx < 0 is West (-X)
+    float deg = std::atan2(dy, dx) * (180.0f / 3.1415926535f);
+    // In Ragnarok, South (270 deg) is index 0, West (180 deg) is index 2,
+    // North (90 deg) is index 4, East (0 deg) is index 6.
+    float ro_deg = 270.0f - deg;
+    while (ro_deg < 0.0f) ro_deg += 360.0f;
+    while (ro_deg >= 360.0f) ro_deg -= 360.0f;
+    int dir = static_cast<int>((ro_deg + 22.5f) / 45.0f) % 8;
+    return static_cast<actor::Direction>(dir);
 }
 
 CLoginMode::CLoginMode() = default;
@@ -124,13 +129,59 @@ bool CLoginMode::on_init(std::string_view map_name) {
     std::ofstream dbg("debug_login.log");
     dbg << "LoginMode on_init started" << std::endl;
 
-    m_map_name = map_name.empty() ? "login.rsw" : std::string(map_name);
+    m_map_name = map_name.empty() ? "prontera.gat" : std::string(map_name);
     m_state = 0;
     m_is_running = true;
 
     // Allocate 1024x768 32-bit software framebuffer
-    dbg << "Creating SoftwareRenderer" << std::endl;
+    dbg << "Creating SoftwareRenderer (1024x768)" << std::endl;
     m_renderer = std::make_unique<render::SoftwareRenderer>(1024, 768);
+
+    // Load ground collision map (Prontera GAT)
+    auto& res = resource::ResourceManager::instance();
+    auto gat_bytes = res.read_file("data\\prontera.gat");
+    if (gat_bytes.empty()) {
+        gat_bytes = res.read_file("prontera.gat");
+    }
+
+    if (!gat_bytes.empty()) {
+        dbg << "Read GAT bytes via ResourceManager: " << gat_bytes.size() << std::endl;
+        auto gat = world::GatCollision::load_from_memory(gat_bytes);
+        if (gat) {
+            m_collision = std::make_unique<world::GatCollision>(std::move(*gat));
+            dbg << "GatCollision loaded: " << m_collision->width() << "x" << m_collision->height() << std::endl;
+        }
+    }
+
+    // Direct filesystem fallback if not found in ResourceManager
+    if (!m_collision) {
+        dbg << "Attempting fallback read for prontera.gat directly..." << std::endl;
+        std::ifstream f("data/prontera.gat", std::ios::binary | std::ios::ate);
+        if (!f.is_open()) {
+            f.open("prontera.gat", std::ios::binary | std::ios::ate);
+        }
+        if (!f.is_open()) {
+            f.open("data/pprontera.gat", std::ios::binary | std::ios::ate);
+        }
+        if (f.is_open()) {
+            const auto size = f.tellg();
+            f.seekg(0, std::ios::beg);
+            std::vector<uint8_t> buf(size);
+            f.read(reinterpret_cast<char*>(buf.data()), size);
+            auto gat = world::GatCollision::load_from_memory(buf);
+            if (gat) {
+                m_collision = std::make_unique<world::GatCollision>(std::move(*gat));
+                dbg << "GatCollision loaded via fallback: " << m_collision->width() << "x" << m_collision->height() << std::endl;
+            }
+        }
+    }
+
+    // Default character spawn at Prontera central plaza
+    m_world_cell_x = 156.0f;
+    m_world_cell_y = 180.0f;
+    m_target_cell_x = 156.0f;
+    m_target_cell_y = 180.0f;
+    m_zoom = 1.0f;
 
     dbg << "Loading character assets" << std::endl;
     dbg.close();
@@ -154,40 +205,73 @@ bool CLoginMode::on_run() {
 bool CLoginMode::on_update(float delta_time) {
     if (!m_is_running) return false;
 
+    m_elapsed_time += delta_time;
+
     // Click effect decay
     if (m_click_timer > 0.0f) {
         m_click_timer -= delta_time;
     }
 
-    // Pathfinding / click-to-move interpolation
+    // Movement & collision resolution in world cell space
     if (m_is_moving) {
-        const float dx = m_target_x - m_pos_x;
-        const float dy = m_target_y - m_pos_y;
+        const float dx = m_target_cell_x - m_world_cell_x;
+        const float dy = m_target_cell_y - m_world_cell_y;
         const float dist = std::sqrt(dx * dx + dy * dy);
 
-        if (dist <= 6.0f) {
-            // Arrived at destination
-            m_pos_x = m_target_x;
-            m_pos_y = m_target_y;
+        if (dist <= 0.12f) {
+            // Reached destination cell
+            m_world_cell_x = m_target_cell_x;
+            m_world_cell_y = m_target_cell_y;
             m_is_moving = false;
             m_action = actor::ActionType::Idle;
-            m_frame_delay = 0.22f; // Return to gentle breathing
+            m_frame_delay = 0.20f;
             m_motion_idx = 0;
         } else {
-            // Walking towards destination
+            // Walking towards target
             m_action = actor::ActionType::Walk;
-            m_frame_delay = 0.09f; // Natural walk cadence (~90ms per step)
-            m_dir = direction_from_delta(dx, dy);
+            m_frame_delay = 0.09f; // Authentic RO walking speed
+            m_dir = direction_from_world_delta(dx, dy);
 
-            const float step = m_move_speed * delta_time;
+            const float step = m_cell_move_speed * delta_time;
             const float move_dist = (step > dist) ? dist : step;
 
-            m_pos_x += (dx / dist) * move_dist;
-            m_pos_y += (dy / dist) * move_dist;
+            const float next_x = m_world_cell_x + (dx / dist) * move_dist;
+            const float next_y = m_world_cell_y + (dy / dist) * move_dist;
+
+            // Collision check against GAT cells
+            if (m_collision) {
+                const int32_t check_cx = static_cast<int32_t>(std::round(next_x));
+                const int32_t check_cy = static_cast<int32_t>(std::round(next_y));
+
+                if (m_collision->is_walkable(check_cx, check_cy)) {
+                    m_world_cell_x = next_x;
+                    m_world_cell_y = next_y;
+                } else {
+                    // Try sliding along X axis
+                    const int32_t curr_cy = static_cast<int32_t>(std::round(m_world_cell_y));
+                    if (m_collision->is_walkable(check_cx, curr_cy)) {
+                        m_world_cell_x = next_x;
+                    } else {
+                        // Try sliding along Y axis
+                        const int32_t curr_cx = static_cast<int32_t>(std::round(m_world_cell_x));
+                        if (m_collision->is_walkable(curr_cx, check_cy)) {
+                            m_world_cell_y = next_y;
+                        } else {
+                            // Blocked by obstacle
+                            m_is_moving = false;
+                            m_action = actor::ActionType::Idle;
+                            m_motion_idx = 0;
+                        }
+                    }
+                }
+            } else {
+                m_world_cell_x = next_x;
+                m_world_cell_y = next_y;
+            }
         }
     }
 
-    // Animation timer for active character sprite
+    // Sprite action animation updates
     if (m_is_moving) {
         m_anim_timer += delta_time;
         if (m_anim_timer >= m_frame_delay) {
@@ -195,7 +279,6 @@ bool CLoginMode::on_update(float delta_time) {
             m_motion_idx++;
         }
     } else {
-        // In Idle, the character stands calmly at motion 0
         m_motion_idx = 0;
         m_anim_timer = 0.0f;
     }
@@ -210,10 +293,18 @@ void CLoginMode::on_draw() {
         m_hwnd = FindWindowA("Ragnarok", nullptr);
     }
 
-    // 1. Clear to dark fantasy slate background
+    // 1. Clear background to dark stone
     m_renderer->clear(0x001B1C24);
 
-    // 2. Draw animated character at current position (m_pos_x, m_pos_y)
+    // 2. Draw ground map centered on player world cell
+    if (m_collision) {
+        m_renderer->draw_map_ground(*m_collision, m_world_cell_x, m_world_cell_y, m_zoom, m_elapsed_time);
+    }
+
+    // 3. Draw animated character at screen center with zoom scaling
+    const int32_t center_x = static_cast<int32_t>(m_renderer->width() / 2);
+    const int32_t center_y = static_cast<int32_t>(m_renderer->height() / 2);
+
     if (m_body_spr && m_body_act) {
         m_renderer->draw_composite_actor(
             m_body_spr.get(),
@@ -223,12 +314,13 @@ void CLoginMode::on_draw() {
             m_action,
             m_dir,
             m_motion_idx,
-            static_cast<int32_t>(m_pos_x),
-            static_cast<int32_t>(m_pos_y)
+            center_x,
+            center_y,
+            m_zoom
         );
     }
 
-    // 3. Present backbuffer to Win32 GDI
+    // 4. Present backbuffer to Win32 GDI
     if (m_hwnd) {
         m_renderer->present(m_hwnd);
 
@@ -236,7 +328,7 @@ void CLoginMode::on_draw() {
         HDC hdc = GetDC(m_hwnd);
         if (hdc) {
             SetBkMode(hdc, TRANSPARENT);
-            SetTextColor(hdc, RGB(220, 220, 240));
+            SetTextColor(hdc, RGB(255, 255, 255));
 
             const std::string title = "Ragnarok Online Reconstructed [Modern C++20 | 1:1 Engine | 60 FPS]";
             TextOutA(hdc, 20, 20, title.c_str(), static_cast<int>(title.size()));
@@ -244,21 +336,31 @@ void CLoginMode::on_draw() {
             const char* dir_names[] = { "South", "SouthWest", "West", "NorthWest", "North", "NorthEast", "East", "SouthEast" };
             const char* act_names[] = { "Idle", "Walk", "Sit", "PickUp", "ReadyFight", "Attack", "Hurt", "Freeze", "Dead", "Special" };
 
-            const std::string status = std::format("Pos: ({:.0f}, {:.0f}) | Dir: {} | Action: {} [Click or hold mouse to walk!]",
-                m_pos_x, m_pos_y,
+            const std::string status = std::format(
+                "Map: Prontera | Cell: ({:.1f}, {:.1f}) | Zoom: {:.2f}x | Dir: {} | Action: {}",
+                m_world_cell_x, m_world_cell_y, m_zoom,
                 dir_names[static_cast<size_t>(m_dir) % 8],
                 (static_cast<size_t>(m_action) < 10) ? act_names[static_cast<size_t>(m_action)] : "Unknown"
             );
             TextOutA(hdc, 20, 45, status.c_str(), static_cast<int>(status.size()));
 
-            // Draw RO Green Click Ring Indicator
+            SetTextColor(hdc, RGB(180, 225, 255));
+            const std::string hint = "Controls: Mouse Wheel / [+][-] / PgUp/PgDn = Zoom | Click to Walk | WASD = Move | Space = Action";
+            TextOutA(hdc, 20, 70, hint.c_str(), static_cast<int>(hint.size()));
+
+            // Draw RO Green Click Ring Indicator in screen coordinates
             if (m_click_timer > 0.0f) {
+                const float base_cell_size = 28.0f;
+                const float cell_size = base_cell_size * m_zoom;
+                const float click_sx = center_x + (m_target_cell_x - m_world_cell_x) * cell_size;
+                const float click_sy = center_y + (m_world_cell_y - m_target_cell_y) * cell_size;
+
                 HPEN greenPen = CreatePen(PS_SOLID, 2, RGB(80, 255, 100));
                 HGDIOBJ oldPen = SelectObject(hdc, greenPen);
                 HGDIOBJ oldBrush = SelectObject(hdc, GetStockObject(NULL_BRUSH));
-                const int cx = static_cast<int>(m_click_x);
-                const int cy = static_cast<int>(m_click_y);
-                const int r = static_cast<int>(14.0f * (m_click_timer / 0.4f) + 4.0f);
+                const int cx = static_cast<int>(click_sx);
+                const int cy = static_cast<int>(click_sy);
+                const int r = static_cast<int>((16.0f * (m_click_timer / 0.4f) + 4.0f) * m_zoom);
                 Ellipse(hdc, cx - r, cy - r, cx + r, cy + r);
                 SelectObject(hdc, oldBrush);
                 SelectObject(hdc, oldPen);
@@ -276,20 +378,44 @@ intptr_t CLoginMode::on_msg(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
     }
 
     switch (msg) {
+        case WM_MOUSEWHEEL: {
+            const short delta = GET_WHEEL_DELTA_WPARAM(wparam);
+            if (delta > 0) {
+                m_zoom = std::clamp(m_zoom * 1.15f, 0.35f, 3.5f);
+            } else if (delta < 0) {
+                m_zoom = std::clamp(m_zoom * 0.87f, 0.35f, 3.5f);
+            }
+            return 1;
+        }
+
         case WM_LBUTTONDOWN: {
-            m_target_x = static_cast<float>(LOWORD(lparam));
-            m_target_y = static_cast<float>(HIWORD(lparam));
+            const float sx = static_cast<float>(LOWORD(lparam));
+            const float sy = static_cast<float>(HIWORD(lparam));
+            const float center_sx = m_renderer ? (m_renderer->width() * 0.5f) : 512.0f;
+            const float center_sy = m_renderer ? (m_renderer->height() * 0.5f) : 384.0f;
+            const float base_cell_size = 28.0f;
+            const float cell_size = base_cell_size * m_zoom;
+
+            m_target_cell_x = m_world_cell_x + (sx - center_sx) / cell_size;
+            m_target_cell_y = m_world_cell_y - (sy - center_sy) / cell_size;
             m_is_moving = true;
-            m_click_x = m_target_x;
-            m_click_y = m_target_y;
+            m_click_screen_x = sx;
+            m_click_screen_y = sy;
             m_click_timer = 0.4f;
             return 1;
         }
 
         case WM_MOUSEMOVE: {
             if (wparam & MK_LBUTTON) {
-                m_target_x = static_cast<float>(LOWORD(lparam));
-                m_target_y = static_cast<float>(HIWORD(lparam));
+                const float sx = static_cast<float>(LOWORD(lparam));
+                const float sy = static_cast<float>(HIWORD(lparam));
+                const float center_sx = m_renderer ? (m_renderer->width() * 0.5f) : 512.0f;
+                const float center_sy = m_renderer ? (m_renderer->height() * 0.5f) : 384.0f;
+                const float base_cell_size = 28.0f;
+                const float cell_size = base_cell_size * m_zoom;
+
+                m_target_cell_x = m_world_cell_x + (sx - center_sx) / cell_size;
+                m_target_cell_y = m_world_cell_y - (sy - center_sy) / cell_size;
                 m_is_moving = true;
             }
             return 1;
@@ -297,36 +423,53 @@ intptr_t CLoginMode::on_msg(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 
         case WM_KEYDOWN:
             switch (wparam) {
+                case VK_OEM_PLUS:
+                case VK_ADD:
+                case VK_PRIOR: { // Page Up
+                    m_zoom = std::clamp(m_zoom * 1.15f, 0.35f, 3.5f);
+                    return 1;
+                }
+                case VK_OEM_MINUS:
+                case VK_SUBTRACT:
+                case VK_NEXT: { // Page Down
+                    m_zoom = std::clamp(m_zoom * 0.87f, 0.35f, 3.5f);
+                    return 1;
+                }
+                case '0':
+                case VK_NUMPAD0:
+                case 'R': {
+                    m_zoom = 1.0f;
+                    return 1;
+                }
                 case VK_LEFT:
                 case 'A': {
-                    m_target_x = std::max(60.0f, m_pos_x - 60.0f);
-                    m_target_y = m_pos_y;
+                    m_target_cell_x = m_world_cell_x - 3.0f;
+                    m_target_cell_y = m_world_cell_y;
                     m_is_moving = true;
                     return 1;
                 }
                 case VK_RIGHT:
                 case 'D': {
-                    m_target_x = std::min(960.0f, m_pos_x + 60.0f);
-                    m_target_y = m_pos_y;
+                    m_target_cell_x = m_world_cell_x + 3.0f;
+                    m_target_cell_y = m_world_cell_y;
                     m_is_moving = true;
                     return 1;
                 }
                 case VK_UP:
                 case 'W': {
-                    m_target_y = std::max(80.0f, m_pos_y - 60.0f);
-                    m_target_x = m_pos_x;
+                    m_target_cell_x = m_world_cell_x;
+                    m_target_cell_y = m_world_cell_y + 3.0f;
                     m_is_moving = true;
                     return 1;
                 }
                 case VK_DOWN:
                 case 'S': {
-                    m_target_y = std::min(700.0f, m_pos_y + 60.0f);
-                    m_target_x = m_pos_x;
+                    m_target_cell_x = m_world_cell_x;
+                    m_target_cell_y = m_world_cell_y - 3.0f;
                     m_is_moving = true;
                     return 1;
                 }
                 case VK_SPACE: {
-                    // Cycle action (Idle -> Walk -> Sit -> Attack -> etc.)
                     const auto a = (static_cast<int>(m_action) + 1) % 7;
                     m_action = static_cast<actor::ActionType>(a);
                     m_is_moving = false;
@@ -334,7 +477,6 @@ intptr_t CLoginMode::on_msg(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam) {
                     return 1;
                 }
                 case VK_TAB: {
-                    // Reload assets
                     load_character_assets();
                     return 1;
                 }

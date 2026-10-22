@@ -5,6 +5,7 @@
 #include "ro/resource/spr.hpp"
 #include "ro/resource/act.hpp"
 #include "ro/actor/actor.hpp"
+#include "ro/world/gat.hpp"
 #include <memory>
 #include <string>
 
@@ -34,6 +35,7 @@ private:
     HWND m_hwnd{nullptr};
 
     std::unique_ptr<render::SoftwareRenderer> m_renderer;
+    std::unique_ptr<world::GatCollision> m_collision;
 
     std::shared_ptr<resource::SprResource> m_body_spr;
     std::shared_ptr<resource::ActResource> m_body_act;
@@ -46,19 +48,23 @@ private:
 
     size_t m_motion_idx{0};
     float m_anim_timer{0.0f};
-    float m_frame_delay{0.22f};
+    float m_frame_delay{0.20f};
+    float m_elapsed_time{0.0f};
 
-    // Movement & Click-to-Move
-    float m_pos_x{512.0f};
-    float m_pos_y{460.0f};
-    float m_target_x{512.0f};
-    float m_target_y{460.0f};
+    // Camera & Zoom
+    float m_zoom{1.0f}; // 0.4x (far out) to 3.0x (close up)
+
+    // World & Navigation (Prontera GAT map cells)
+    float m_world_cell_x{156.0f};
+    float m_world_cell_y{180.0f};
+    float m_target_cell_x{156.0f};
+    float m_target_cell_y{180.0f};
     bool m_is_moving{false};
-    float m_move_speed{150.0f}; // pixels per second
+    float m_cell_move_speed{6.5f}; // cells per second
 
     float m_click_timer{0.0f};
-    float m_click_x{0.0f};
-    float m_click_y{0.0f};
+    float m_click_screen_x{0.0f};
+    float m_click_screen_y{0.0f};
 };
 
 } // namespace ro::mode
